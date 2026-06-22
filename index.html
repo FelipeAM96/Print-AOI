@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Visualizador AOI</title>
+    <title>Print AOI</title>
+    <link rel="icon" type="image/png" href="img/Treco_Engesat.png" onerror="this.remove()" />
     
     <!-- Tailwind CSS para estilização da interface -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -18,12 +19,22 @@
     <!-- html2canvas para exportar o mapa HTML para PNG -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 
-    <link rel="icon" type="image/png" href="img/Treco_Engesat.png" onerror="this.remove()" />
-    
     <style>
         /* Estilos adicionais para esconder scrollbar no canvas se necessário */
         .canvas-container {
             max-height: 70vh;
+        }
+        /* Estilização melhorada para a barra de escala (tipo régua técnica) */
+        .leaflet-control-scale-line {
+            border: 2px solid #0f172a !important;
+            border-top: none !important;
+            line-height: 1.5 !important;
+            padding: 2px 5px 1px !important;
+            font-size: 14px !important;
+            font-weight: bold !important;
+            color: #0f172a !important;
+            background: rgba(255, 255, 255, 0.9) !important;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.2);
         }
     </style>
 </head>
@@ -33,7 +44,7 @@
         
         <!-- Cabeçalho -->
         <div class="bg-blue-600 p-6 text-white text-center">
-            <h1 class="text-3xl font-bold">Processador de KML/KMZ</h1>
+            <h1 class="text-3xl font-bold">Print AOI</h1>
             <p class="text-blue-100 mt-2">Gere imagens de seus polígonos projetados em SIRGAS 2000 UTM automaticamente.</p>
         </div>
 
@@ -57,7 +68,11 @@
             </div>
 
             <!-- Botões de Ação -->
-            <div id="actionsContainer" class="hidden flex justify-center mb-6">
+            <div id="actionsContainer" class="hidden flex justify-center gap-4 mb-6">
+                <button id="copyBtn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-8 rounded-lg shadow-lg transform transition hover:-translate-y-1 flex items-center">
+                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+                    Copiar Imagem
+                </button>
                 <button id="downloadBtn" class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 px-8 rounded-lg shadow-lg transform transition hover:-translate-y-1 flex items-center">
                     <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
                     Baixar Imagem PNG
@@ -75,6 +90,23 @@
         </div>
     </div>
 
+    <!-- Modal para Cópia Manual (Fallback) -->
+    <div id="copyModal" class="hidden fixed inset-0 z-[1000] bg-black/80 flex items-center justify-center p-4">
+        <div class="bg-white rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] flex flex-col">
+            <div class="p-4 border-b flex justify-between items-center bg-slate-50 rounded-t-xl">
+                <h3 class="text-lg font-bold text-slate-800">Cópia Manual Necessária</h3>
+                <button id="closeModalBtn" class="text-slate-500 hover:text-red-500 font-bold text-3xl leading-none">&times;</button>
+            </div>
+            <div class="p-4 overflow-auto flex-1 bg-slate-200 flex justify-center items-center">
+                <img id="modalImage" src="" class="max-w-full h-auto border shadow-sm" alt="Mapa Gerado" />
+            </div>
+            <div class="p-4 border-t bg-slate-50 text-center rounded-b-xl text-slate-600">
+                <p>O seu navegador bloqueou a cópia automática por questões de segurança (comum em iframes).<br/>
+                <strong>Clique com o botão direito na imagem acima</strong> e selecione <strong>"Copiar imagem"</strong> para colar onde quiser.</p>
+            </div>
+        </div>
+    </div>
+
     <script>
         // Elementos do DOM
         const fileInput = document.getElementById('fileInput');
@@ -82,12 +114,14 @@
         const canvasContainer = document.getElementById('canvasContainer');
         const actionsContainer = document.getElementById('actionsContainer');
         const downloadBtn = document.getElementById('downloadBtn');
+        const copyBtn = document.getElementById('copyBtn');
         const errorBox = document.getElementById('errorBox');
         const errorMessage = document.getElementById('errorMessage');
 
         let map = null;
         let polygonLayer = null;
         let currentFileName = '';
+        let polygonsData = []; // Armazena dados de múltiplos polígonos
 
         // Constantes da Projeção e Elipsoide (GRS80 usado pelo SIRGAS 2000)
         const a = 6378137.0; // Semieixo maior
@@ -148,10 +182,9 @@
                 throw new Error("Nenhum polígono encontrado no arquivo.");
             }
 
-            let allRings = [];
-            let totalLon = 0, totalLat = 0, pointsCount = 0;
+            polygonsData = [];
 
-            // Extrair coordenadas
+            // Extrair coordenadas e calcular atributos de CADA polígono separadamente
             for (let i = 0; i < polygons.length; i++) {
                 const outers = polygons[i].getElementsByTagName("outerBoundaryIs");
                 if (outers.length > 0) {
@@ -161,6 +194,7 @@
                         // Separa por espaços ou quebras de linha
                         const pointsStr = coordsStr.split(/\s+/);
                         const ring = [];
+                        let totalLon = 0, totalLat = 0, pointsCount = 0;
                         
                         pointsStr.forEach(p => {
                             const parts = p.split(',');
@@ -176,46 +210,34 @@
                             }
                         });
                         
-                        if (ring.length > 0) allRings.push(ring);
+                        if (ring.length > 0) {
+                            // Identificar Fuso e Hemisfério para o polígono atual
+                            const avgLon = totalLon / pointsCount;
+                            const avgLat = totalLat / pointsCount;
+                            const zoneNumber = Math.floor((avgLon + 180) / 6) + 1;
+                            const hemisphere = avgLat >= 0 ? 'N' : 'S';
+                            const projectionName = `UTM ${zoneNumber}${hemisphere} SIRGAS 2000`;
+
+                            // Projetar para UTM e calcular área
+                            const ringUTM = ring.map(pt => latLonToUTM(pt.lat, pt.lon, zoneNumber));
+                            const areaSqMeters = calculateShoelaceArea(ringUTM);
+                            const areaKm2 = areaSqMeters / 1000000;
+
+                            polygonsData.push({
+                                ringWGS84: ring,
+                                areaKm2: areaKm2,
+                                projectionName: projectionName,
+                                index: i + 1 // Número de identificação do polígono
+                            });
+                        }
                     }
                 }
             }
 
-            if (allRings.length === 0) throw new Error("Não foi possível extrair as coordenadas do polígono.");
+            if (polygonsData.length === 0) throw new Error("Não foi possível extrair as coordenadas do polígono.");
 
-            // Identificar Fuso e Hemisfério com base no centroide aproximado
-            const avgLon = totalLon / pointsCount;
-            const avgLat = totalLat / pointsCount;
-            
-            const zoneNumber = Math.floor((avgLon + 180) / 6) + 1;
-            const hemisphere = avgLat >= 0 ? 'N' : 'S';
-            const projectionName = `UTM ${zoneNumber}${hemisphere} SIRGAS 2000`;
-
-            // Projetar para UTM e calcular área
-            let totalAreaSqMeters = 0;
-            const ringsUTM = [];
-
-            let minEasting = Infinity, maxEasting = -Infinity;
-            let minNorthing = Infinity, maxNorthing = -Infinity;
-
-            allRings.forEach(ring => {
-                const ringUTM = ring.map(pt => {
-                    const utm = latLonToUTM(pt.lat, pt.lon, zoneNumber);
-                    
-                    if (utm.easting < minEasting) minEasting = utm.easting;
-                    if (utm.easting > maxEasting) maxEasting = utm.easting;
-                    if (utm.northing < minNorthing) minNorthing = utm.northing;
-                    if (utm.northing > maxNorthing) maxNorthing = utm.northing;
-
-                    return utm;
-                });
-                totalAreaSqMeters += calculateShoelaceArea(ringUTM);
-            });
-
-            const areaKm2 = totalAreaSqMeters / 1000000;
-
-            // Renderizar no Mapa Leaflet passando as coordenadas Geográficas
-            renderMap(allRings, areaKm2, projectionName);
+            // Renderizar no Mapa Leaflet passando todos os polígonos
+            renderMap(polygonsData);
         }
 
         // Conversão WGS84 Geográfico para UTM
@@ -258,8 +280,20 @@
             return Math.abs(area) / 2.0;
         }
 
+        // Atualiza as caixas de legenda na tela
+        function updateLegend(areaKm2, projectionName, index = null) {
+            const titleElem = document.getElementById('legendTitle');
+            if(titleElem) {
+                let titleStr = `Local: ${currentFileName}`;
+                if (index !== null) titleStr += ` (Polígono ${index})`;
+                titleElem.textContent = titleStr;
+                document.getElementById('legendArea').textContent = `Área: ${areaKm2.toLocaleString('pt-BR', { minimumFractionDigits: 4, maximumFractionDigits: 4 })} km²`;
+                document.getElementById('legendProj').textContent = `Sistema: ${projectionName}`;
+            }
+        }
+
         // Função para Renderizar no Leaflet
-        function renderMap(ringsWGS84, areaKm2, projectionName) {
+        function renderMap(polygonsData) {
             // 1. Exibe o container e botões PRIMEIRO para o Leaflet saber as dimensões da tela
             canvasContainer.classList.remove('hidden');
             actionsContainer.classList.remove('hidden');
@@ -335,38 +369,53 @@
                 map.removeLayer(polygonLayer);
             }
 
-            // 5. Converte rings (objetos) para o formato do Leaflet (array de arrays de [lat, lon])
-            const latLngs = ringsWGS84.map(ring => ring.map(pt => [pt.lat, pt.lon]));
+            // Usamos um FeatureGroup para agrupar múltiplos polígonos
+            polygonLayer = L.featureGroup().addTo(map);
 
-            // 6. Adiciona o novo polígono (Grosso, Vermelho, Transparente)
-            polygonLayer = L.polygon(latLngs, {
-                color: '#ff0000', 
-                weight: 6,        
-                fillOpacity: 0    
-            }).addTo(map);
+            // 5 e 6. Converte rings e adiciona cada polígono
+            polygonsData.forEach((polyData, idx) => {
+                const latLngs = polyData.ringWGS84.map(pt => [pt.lat, pt.lon]);
+                const isSelected = idx === 0; // O primeiro polígono fica selecionado por padrão
+                
+                const leafletPoly = L.polygon(latLngs, {
+                    color: isSelected ? '#ff0000' : '#f87171', // Vermelho forte para o selecionado, claro para os outros
+                    weight: isSelected ? 4 : 2, // Espessura menor que antes (4 e 2 em vez de 6)
+                    fillOpacity: isSelected ? 0.1 : 0 // Destaque suave no interior do selecionado
+                });
 
-            // 7. Atualiza a Legenda sobreposta que agora é parte do mapa
-            document.getElementById('legendTitle').textContent = `Local: ${currentFileName}`;
-            document.getElementById('legendArea').textContent = `Área: ${areaKm2.toLocaleString('pt-BR', { minimumFractionDigits: 4, maximumFractionDigits: 4 })} km²`;
-            document.getElementById('legendProj').textContent = `Sistema: ${projectionName}`;
+                // Adiciona o evento de clique para seleção
+                if (polygonsData.length > 1) {
+                    leafletPoly.on('click', () => {
+                        // Reseta a cor de todos
+                        polygonLayer.eachLayer(layer => {
+                            layer.setStyle({ color: '#f87171', weight: 2, fillOpacity: 0 });
+                        });
+                        // Destaca o polígono clicado
+                        leafletPoly.setStyle({ color: '#ff0000', weight: 4, fillOpacity: 0.1 });
+                        
+                        // Atualiza as informações da legenda
+                        updateLegend(polyData.areaKm2, polyData.projectionName, polyData.index);
+                    });
+                }
 
-            // 8. Usa um pequeno timeout para garantir que o DOM processou a div visível antes de aplicar o Zoom
+                polygonLayer.addLayer(leafletPoly);
+            });
+
+            // 7. Atualiza a Legenda com os dados do primeiro polígono
+            updateLegend(polygonsData[0].areaKm2, polygonsData[0].projectionName, polygonsData.length > 1 ? polygonsData[0].index : null);
+
+            // 8. Usa um pequeno timeout para garantir que o DOM processou a div visível antes de aplicar o Zoom (mais perto = padding 20)
             setTimeout(() => { 
-                map.invalidateSize(); // Atualiza dimensões mais uma vez por precaução
-                map.fitBounds(polygonLayer.getBounds(), { padding: [50, 50] }); 
+                map.invalidateSize(); 
+                map.fitBounds(polygonLayer.getBounds(), { padding: [20, 20] }); 
             }, 100);
         }
 
-        // Função de Download com html2canvas
-        downloadBtn.addEventListener('click', () => {
-            const mapNode = document.getElementById('map'); // Alvo agora é APENAS o mapa
+        // Função utilitária para gerar o Canvas
+        async function generateMapCanvas() {
+            const mapNode = document.getElementById('map');
             
-            // Estado visual de carregamento no botão
-            const originalText = downloadBtn.innerHTML;
-            downloadBtn.innerHTML = 'Processando Imagem...';
-            downloadBtn.disabled = true;
-
-            // Esconde temporariamente os botões nativos de zoom do mapa na captura
+            // Esconde temporariamente os botões nativos de zoom
             const zoomControl = document.querySelector('.leaflet-control-zoom');
             if (zoomControl) zoomControl.style.display = 'none';
 
@@ -375,34 +424,95 @@
             const originalScrollY = window.scrollY;
             window.scrollTo(0, 0);
 
-            // Aguarda um instante para garantir renderização do mapa
-            setTimeout(() => {
-                html2canvas(mapNode, {
+            // Aguarda um instante para garantir renderização
+            await new Promise(r => setTimeout(r, 500));
+
+            try {
+                const canvas = await html2canvas(mapNode, {
                     useCORS: true,
                     allowTaint: false,
-                    backgroundColor: '#ffffff', // Força fundo sólido para prevenir cinza
+                    backgroundColor: '#ffffff', // Força fundo sólido
                     scale: 2 // Alta resolução
-                }).then(canvas => {
-                    const link = document.createElement('a');
-                    link.download = `${currentFileName}_Mapa.png`;
-                    link.href = canvas.toDataURL('image/png', 1.0);
-                    link.click();
-                    
-                    // Restaura estado original
-                    downloadBtn.innerHTML = originalText;
-                    downloadBtn.disabled = false;
-                    if (zoomControl) zoomControl.style.display = '';
-                    window.scrollTo(originalScrollX, originalScrollY);
-                }).catch(err => {
-                    console.error("Erro ao gerar imagem:", err);
-                    alert("Erro ao gerar imagem. Verifique sua conexão e tente novamente.");
-                    
-                    downloadBtn.innerHTML = originalText;
-                    downloadBtn.disabled = false;
-                    if (zoomControl) zoomControl.style.display = '';
-                    window.scrollTo(originalScrollX, originalScrollY);
                 });
-            }, 500);
+                return canvas;
+            } finally {
+                // Restaura visualização
+                if (zoomControl) zoomControl.style.display = '';
+                window.scrollTo(originalScrollX, originalScrollY);
+            }
+        }
+
+        // Função de Download
+        downloadBtn.addEventListener('click', async () => {
+            const originalText = downloadBtn.innerHTML;
+            downloadBtn.innerHTML = 'Processando...';
+            downloadBtn.disabled = true;
+
+            try {
+                const canvas = await generateMapCanvas();
+                const link = document.createElement('a');
+                link.download = `${currentFileName}_Mapa.png`;
+                link.href = canvas.toDataURL('image/png', 1.0);
+                link.click();
+            } catch (err) {
+                console.error("Erro ao gerar imagem:", err);
+                alert("Erro ao gerar imagem. Verifique sua conexão e tente novamente.");
+            } finally {
+                downloadBtn.innerHTML = originalText;
+                downloadBtn.disabled = false;
+            }
+        });
+
+        // Evento para fechar modal de cópia
+        document.getElementById('closeModalBtn').addEventListener('click', () => {
+            document.getElementById('copyModal').classList.add('hidden');
+        });
+
+        // Função para Copiar Imagem para a Área de Transferência
+        copyBtn.addEventListener('click', async () => {
+            const originalText = copyBtn.innerHTML;
+            copyBtn.innerHTML = 'Copiando...';
+            copyBtn.disabled = true;
+
+            try {
+                const canvas = await generateMapCanvas();
+                
+                canvas.toBlob(async (blob) => {
+                    let copied = false;
+                    
+                    try {
+                        // Tenta usar a API de Clipboard nativa (Bloqueada em ambientes sem HTTPS ou File://)
+                        if (navigator.clipboard && navigator.clipboard.write) {
+                            const clipboardItem = new ClipboardItem({ 'image/png': blob });
+                            await navigator.clipboard.write([clipboardItem]);
+                            copied = true;
+                        }
+                    } catch (apiError) {
+                        console.warn("Navegador bloqueou a cópia direta por medidas de segurança. Acionando fallback visual.");
+                    }
+
+                    if (copied) {
+                        // Sucesso
+                        copyBtn.innerHTML = 'Copiado!';
+                        setTimeout(() => { copyBtn.innerHTML = originalText; }, 2000);
+                        copyBtn.disabled = false;
+                    } else {
+                        // Se falhar (o que sempre ocorrerá no iframe ou via file:///), força a janela para cópia manual infalível
+                        const imgUrl = canvas.toDataURL('image/png', 1.0);
+                        document.getElementById('modalImage').src = imgUrl;
+                        document.getElementById('copyModal').classList.remove('hidden');
+                        
+                        copyBtn.innerHTML = originalText;
+                        copyBtn.disabled = false;
+                    }
+                }, 'image/png', 1.0);
+
+            } catch (err) {
+                console.error("Erro ao preparar a imagem:", err);
+                alert("Erro ao preparar a imagem para cópia.");
+                copyBtn.disabled = false;
+                if (copyBtn.innerHTML === 'Copiando...') copyBtn.innerHTML = originalText;
+            }
         });
 
         // Permitir drag & drop nativo
